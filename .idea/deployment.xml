@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="PublishConfigData" autoUpload="On explicit save action" serverName="root@localhost:11008 password (2)" remoteFilesAllowedToDisappearOnAutoupload="false" autoUploadExternalChanges="true">
+    <serverData>
+      <paths name="root@10.248.26.71:22">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@localhost:11002 password">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@localhost:11008">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@localhost:11008 (2)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@localhost:11008 (3)">
+        <serverdata>
+          <mappings>
+            <mapping local="" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@localhost:11008 password">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@localhost:11008 password (1)">
+        <serverdata>
+          <mappings>
+            <mapping local="" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@localhost:11008 password (2)">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/root/Projects/SC-TWA" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+    </serverData>
+    <option name="myAutoUpload" value="ON_EXPLICIT_SAVE" />
+  </component>
+</project>
