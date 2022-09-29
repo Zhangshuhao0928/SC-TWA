@@ -53,5 +53,6 @@ class QMixNet(nn.Module):
         b2 = b2.view(-1, 1, 1)  # (1920, 1， 1)
 
         q_total = torch.bmm(hidden, w2) + b2  # (1920, 1, 1)
+        #(episode_num,max_episode_len,1)
         q_total = q_total.view(episode_num, -1, 1)  # (32, 60, 1)
         return q_total

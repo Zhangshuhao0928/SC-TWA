@@ -1,3 +1,5 @@
+import threading
+from torch.multiprocessing import Process
 from workers import Worker
 from worker_dis import Worker_dis
 from agent.agent import Agents
@@ -12,30 +14,55 @@ import time
 from common.arguments import get_common_args, get_mixer_args
 import torch.multiprocessing as mp
 from common.replay_buffer import ReplayBuffer
+from concurrent.futures import ThreadPoolExecutor
 
 # -----初始化CUDA相关------
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2"
 # cuda0 = torch.device('cuda:0')
 # cuda1 = torch.device('cuda:1')
 # -------------------------
-
+# from test_gpumemory import test111
 
 def trainer_dis(args):
     begin = time.time()
     rank=args.local_rank
-    # dist.init_process_group("nccl")
     torch.cuda.set_device(args.local_rank)
-    fighter_model=Worker_dis(args,rank)
-    buffer=ReplayBuffer(args)
+    buffer = ReplayBuffer(args)
+    torch.multiprocessing.set_start_method('spawn')
+
+
+
+    # for i in range(3):
+    #     actor = test111()
+    #     actor.start()
+    #     actor.join()
+
+    fighter_model=Worker_dis(args,rank,buffer)
+
+    # thread_pool=ThreadPoolExecutor(args.env_nums)
+    # # lock=threading.Lock()
+    # data_queue = Queue()
+    # task= [thread_pool.submit(collect_data, fighter_model,args,i,data_queue) for i in range(args.env_nums)]
+
 
     train_steps = 0
     while train_steps<=args.n_epoch//args.batch_size:
-        data_batch = fighter_model.data_maker()
-        buffer.store_episode(data_batch)
-        mini_batch=buffer.sample(args.batch_size)
-        fighter_model.agent.train(mini_batch, train_steps)
-        train_steps += 1
-        print('train %d times' % train_steps)
+    #     # data_batch = fighter_model.data_maker()
+    #     # buffer.store_episode(data_batch)
+    #     try:
+    #         data_batch=data_queue.get_nowait()
+    #         buffer.store_episode(data_batch)
+    #         print("size:",buffer.current_size)
+    #     # if buffer.current_size >= args.batch_size:
+    #     except:
+    #         continue
+    # #     # else:
+    # #     #     time.sleep(5)
+        if buffer.current_size>=args.batch_size:
+            mini_batch=buffer.sample(args.batch_size)
+            fighter_model.agent.train(mini_batch, train_steps)
+            train_steps += 1
+            print('train %d times' % train_steps)
 
         if train_steps == 500 or train_steps == 1000 or train_steps == 5000:
             end = time.time()
@@ -126,10 +153,8 @@ if __name__ == "__main__":
 
     #distributed default
     args.worker_nums = 1
-    args.env_nums = 1
-    # args.dp = True
+    args.env_nums = 2
+    # args.ddp = False
     if args.learn:
         print('learn')
-        # trainer_dp(args)
-        if args.ddp:
-            trainer_dis(args)
+        trainer_dis(args)

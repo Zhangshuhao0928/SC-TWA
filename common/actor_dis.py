@@ -5,16 +5,21 @@
 # @Software : PyCharm
 
 import numpy as np
-# import torch
+import torch
 # from torch.distributions import one_hot_categorical
 import time
 from copy import deepcopy
 from smac.env import StarCraft2Env
 import time
+from threading import Thread,Lock
 from policy import qmix_model
+import matplotlib.pyplot as plt
+import os
+from torch.multiprocessing import Process
 
-class Actor_dis(object):
-    def __init__(self, args,env_idx):
+class Actor_dis(Thread):
+    def __init__(self, args, env_idx,data_queue,share_model,ac_id,buffer,rank):
+        super(Actor_dis,self).__init__(daemon=True)  #守护线程
         self.episode_limit = args.episode_limit
         self.n_actions = args.n_actions
         self.n_agents = args.n_agents
@@ -27,20 +32,34 @@ class Actor_dis(object):
         self.min_epsilon = args.min_epsilon
 
         self.env_idx = env_idx
+        self.n_epoch=self.args.n_epoch
+        self.n_env=self.args.env_nums
+        self.data_queue=data_queue
+        self.share_model=share_model
+        self.ac_id=ac_id
+        self.buffer=buffer
+        self.rank=rank
+        self.eval_hidden=None
+        self.experience_batch=[]
+
+        self.lock=Lock()
 
         self.actor_agent = qmix_model.QmixModel(args)
-        self.done=0
-        self.rollouts_number = self.args.n_epoch
+        self.rollouts_number = self.args.n_epoch//args.env_nums
         self.env = StarCraft2Env(map_name=self.args.map,
                                  step_mul=self.args.step_mul,
                                  difficulty=self.args.difficulty,
                                  game_version=self.args.game_version,
                                  replay_dir=self.args.replay_dir)
 
+        self.actor_agent.create_hidden(1)
+
+
         print('Init Actor')
 
+
+
     def generate_episode(self, episode_num=None, evaluate=False):
-        self.done=False
         o, u, r, s, avail_u, u_onehot, terminate, padded = [], [], [], [], [], [], [], []
         #重置环境
         self.env.reset()
@@ -150,9 +169,96 @@ class Actor_dis(object):
         if evaluate and episode_num == self.args.evaluate_epoch - 1 and self.args.replay_dir != '':
             self.env.save_replay()
             self.env.close()
-        self.done+=1
-        if self.done==self.rollouts_number:
-            self.env.close()
 
         return episode, episode_reward, win_tag
 
+    def run(self):
+        n_rollout = 0
+        while n_rollout < self.n_epoch // self.n_env:
+
+            episode, episode_reward, win_tag=self.generate_episode(n_rollout,False)
+            self.data_queue.put([episode_reward, win_tag])
+            self.experience_batch.append(episode)
+            print('Rank {} Env {} run episode {}'.format(self.rank,self.ac_id, n_rollout))
+            self.actor_agent.restart_hidden(self.env_idx, 1)
+
+            self.actor_agent.eval_rnn.load_state_dict(
+                    {k.replace('module.', ''): v for k, v in self.share_model.state_dict().items()})
+
+            if len(self.experience_batch)==self.args.batch_size//self.n_env+1:
+                with self.lock:
+                    self.buffer.store_episode(self.experience_batch)
+                    print('Rank {} Buffer_size {}'.format(self.rank,self.buffer.current_size))
+                    self.experience_batch=[]
+
+            n_rollout+=1
+
+        self.env.close()
+
+
+class Plt_thread(Thread):
+    def __init__(self,args,date_queue,rank):
+        super(Plt_thread, self).__init__(daemon=True)
+        self.args=args
+        self.episode_rewards=[]
+        self.win_rates=[]
+        self.data_queue=date_queue
+        self.rank=rank
+        self.save_path=self.args.result_dir + '/' + 'mp_qmix' + '/' + args.map
+        if not os.path.exists(self.save_path):
+            os.makedirs(self.save_path)
+        self.start_time = time.time()
+
+    def run(self,num=1):
+        rcount = 0
+        tmp_reward = 0
+        win_number = 0
+        last_time = 0
+
+        while True:
+            now_time = time.time()
+            long_time = int(now_time - self.start_time)
+
+            # 这里exper是一个字典，里面有很多个key，每个key的shape都是（1，x，x，x）
+            # x就是和buff后面三个维度一致
+            try:
+                episode_reward, win_tag = self.data_queue.get_nowait()
+            except:
+                continue
+
+            if win_tag:
+                win_number = win_number + 1
+            tmp_reward += episode_reward
+            rcount += 1
+
+            # 一分钟测一次
+            # 只用0卡
+            if long_time % 60 == 0 and long_time != last_time and self.rank == 0:
+                tmp_reward /= rcount
+                self.episode_rewards.append(tmp_reward)
+                self.plt(num)
+                if win_number / rcount > 0.8:
+                    print('fast start time is {}'.format(long_time))
+                self.win_rates.append(win_number / rcount)
+                tmp_reward, win_number, rcount = 0, 0, 0
+                last_time = long_time
+
+
+    def plt(self, num):
+        plt.figure(figsize=(12, 8))
+        plt.axis([0, self.args.n_epoch, 0, 100])
+        plt.cla()
+        plt.subplot(2, 1, 1)
+        plt.plot(range(len(self.episode_rewards)), self.episode_rewards)
+        plt.xlabel('time')
+        # plt.xlabel('epoch')
+        plt.ylabel('episode_rewards')
+
+        plt.subplot(2, 1, 2)
+        plt.plot(range(len(self.win_rates)), self.win_rates)
+        plt.xlabel('time')
+        plt.ylabel('win_rate')
+
+        plt.savefig(self.save_path + '/plt_{}.png'.format(num), format='png')
+        np.save(self.save_path + '/win_rates_{}'.format(num), self.win_rates)
+        np.save(self.save_path + '/episode_rewards_{}'.format(num), self.episode_rewards)

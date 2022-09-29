@@ -75,6 +75,7 @@ class ReplayBuffer:
 
     def   sample(self, batch_size):
         temp_buffer = {}
+        #idx是一个数组，用来当做取batch的下标
         idx = np.random.randint(0, self.current_size, batch_size)
         for key in self.buffers.keys():
             temp_buffer[key] = self.buffers[key][idx]

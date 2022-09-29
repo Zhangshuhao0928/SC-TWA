@@ -33,6 +33,8 @@ def get_common_args():
     parser.add_argument('--local_rank', type=int, default=0, help='use for DDP')
     parser.add_argument('--dp',type=bool,default=False,help='whether to use DP')
     parser.add_argument('--ddp', type=bool, default=True, help='whether to use DDP')
+    parser.add_argument('--ger_in_gpu', type=bool, default=False, help='whether use GPU to general data')
+    # parser.add_argument('--thread_num', type=int, default=10, help='decide using thread while in ddp')
     # parser.add_argument('--node_rank', type=int, default=0, help='use for multi-machines')
     # parser.add_argument('--world_size', type=int, default=3, help='use for multi-machines')
     args = parser.parse_args()
@@ -107,7 +109,7 @@ def get_mixer_args(args):
     args.evaluate_cycle = 100
 
     # experience replay
-    args.batch_size = 96
+    args.batch_size = 33
     args.control_queue_size=6
     args.buffer_size = 5000
 

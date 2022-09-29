@@ -86,6 +86,7 @@ class Agents:
         max_episode_len = self._get_max_episode_len(batch)
         for key in batch.keys():
             if key != 'z':
+                #在这里所有的数据就处理成等长度了
                 batch[key] = batch[key][:, :max_episode_len]
         self.policy.learn(batch, max_episode_len, train_step, epsilon)
         if train_step > 0 and train_step % self.args.save_cycle == 0:

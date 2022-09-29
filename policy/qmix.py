@@ -31,6 +31,7 @@ class QMIX:
         self.target_qmix_net = QMixNet(args)
 
         self.args = args
+        self.rank=rank
         #将模型加载到gpu中
 
         if self.args.cuda:
@@ -91,6 +92,7 @@ class QMIX:
         传入每个episode的同一个位置的transition
         '''
         episode_num = batch['o'].shape[0]
+        #这里初始化hidden的episode_num就是一个batch的了，跟worker中不一样，不再是一直是1了
         self.init_hidden(episode_num)
         for key in batch.keys():  # 把batch里的数据转化成tensor
             if key == 'u':
@@ -100,7 +102,9 @@ class QMIX:
         s, s_next, u, r, avail_u, avail_u_next, terminated = batch['s'], batch['s_next'], batch['u'], \
                                                              batch['r'],  batch['avail_u'], batch['avail_u_next'],\
                                                              batch['terminated']
-        mask = 1 - batch["padded"].float()  # 用来把那些填充的经验的TD-error置0，从而不让它们影响到学习
+        # 用来把那些填充的经验的TD-error置0，从而不让它们影响到学习
+        #有用的time_step的mask处的值会是1，填充的time_step的mask值会是0
+        mask = 1 - batch["padded"].float()
 
         # 得到每个agent对应的Q值，维度为(episode个数, max_episode_len， n_agents， n_actions)
         q_evals, q_targets = self.get_q_values(batch, max_episode_len)
@@ -126,7 +130,7 @@ class QMIX:
         q_total_eval = self.eval_qmix_net(q_evals, s)
         #获得max q‘tot  q_targets输入在公式中就是max联合动作u’的输入
         q_total_target = self.target_qmix_net(q_targets, s_next)
-
+        #这里去掉了已经结束的轨迹的后续因为填充所导致的q_total_target
         targets = r + self.args.gamma * q_total_target * (1 - terminated)
 
         td_error = (q_total_eval - targets.detach())
@@ -146,17 +150,17 @@ class QMIX:
             self.target_qmix_net.load_state_dict(self.eval_qmix_net.state_dict())
 
     def _get_inputs(self, batch, transition_idx):
-        # 取出所有episode上该transition_idx的经验，u_onehot要取出所有，因为要用到上一条
+        # 取出所有episode上该transition_idx（time_step）的经验，u_onehot要取出所有，因为要用到上一条
         obs, obs_next, u_onehot = batch['o'][:, transition_idx], \
                                   batch['o_next'][:, transition_idx], batch['u_onehot'][:]
         episode_num = obs.shape[0]
         inputs, inputs_next = [], []
         inputs.append(obs)
         inputs_next.append(obs_next)
-        # 给obs添加上一个动作、agent编号
 
+        # 给obs添加上一个动作、agent编号
         if self.args.last_action:
-            if transition_idx == 0:  # 如果是第一条经验，就让前一个动作为0向量
+            if transition_idx == 0:  # 如果是第一个时间步的经验，就让前一个动作为0向量
                 inputs.append(torch.zeros_like(u_onehot[:, transition_idx]))
             else:
                 inputs.append(u_onehot[:, transition_idx - 1])
@@ -176,6 +180,7 @@ class QMIX:
     def get_q_values(self, batch, max_episode_len):
         episode_num = batch['o'].shape[0]
         q_evals, q_targets = [], []
+        #每个时间步分别处理运算
         for transition_idx in range(max_episode_len):
             inputs, inputs_next = self._get_inputs(batch, transition_idx)  # 给obs加last_action、agent_id
             if self.args.cuda:
@@ -183,15 +188,17 @@ class QMIX:
                 inputs_next = inputs_next.cuda()
                 self.eval_hidden = self.eval_hidden.cuda()
                 self.target_hidden = self.target_hidden.cuda()
+            #这里直接将整个hidden传入了，因为是一个batch并且多个agent的数据作为input
             q_eval, self.eval_hidden = self.eval_rnn(inputs, self.eval_hidden)  # inputs维度为(40,96)，得到的q_eval维度为(40,n_actions)
             q_target, self.target_hidden = self.target_rnn(inputs_next, self.target_hidden)
 
             # 把q_eval维度重新变回(8, 5,n_actions)
+            #这里的q是每个episode的某一时间步下的每个智能体的每个动作的评分
             q_eval = q_eval.view(episode_num, self.n_agents, -1)
             q_target = q_target.view(episode_num, self.n_agents, -1)
             q_evals.append(q_eval)
             q_targets.append(q_target)
-        # 得的q_eval和q_target是一个列表，列表里装着max_episode_len个数组，数组的的维度是(episode个数, n_agents，n_actions)
+        # 得的q_eval和q_target是一个列表，列表里装着max_episode_len个列表，维度是(episode个数, n_agents，n_actions)
         # 把该列表转化成(episode个数, max_episode_len， n_agents，n_actions)的数组
         q_evals = torch.stack(q_evals, dim=1)
         q_targets = torch.stack(q_targets, dim=1)

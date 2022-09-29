@@ -102,6 +102,8 @@ class QmixModel:
         # 神经网络
         self.eval_rnn = RNN(input_shape, args)  # 每个agent选动作的网络
         self.args = args
+        if self.args.ger_in_gpu:
+            self.eval_rnn.cuda()
         # if self.args.cuda:
         #     # torch.cuda.set_device(wk_id)
         #     self.eval_rnn.cuda()
@@ -136,7 +138,7 @@ class QmixModel:
             inputs = np.hstack((inputs, last_action))
         if self.args.reuse_network:
             inputs = np.hstack((inputs, agent_id))
-
+        #这里的hidden_state和learner中的不太一样，因为是每个agent做决策，并且episode_num一直是1，所以如下
         hidden_state = self.eval_hiddens[env_id][:, agent_num, :]
         # transform the shape of inputs from (42,) to (1,42)
         inputs = torch.tensor(inputs, dtype=torch.float32).unsqueeze(0)
@@ -146,7 +148,12 @@ class QmixModel:
         #     hidden_state = hidden_state.cuda()
 
         # get q value
-        q_value, self.eval_hiddens[env_id][:, agent_num, :] = self.eval_rnn(inputs, hidden_state)
+        if self.args.ger_in_gpu:
+            inputs=inputs.cuda()
+            hidden_state=hidden_state.cuda()
+            q_value, self.eval_hiddens[env_id][:, agent_num, :] = self.eval_rnn(inputs, hidden_state)
+        else:
+            q_value, self.eval_hiddens[env_id][:, agent_num, :] = self.eval_rnn(inputs, hidden_state)
 
         # choose action from q value
         q_value[avail_actions == 0.0] = - float("inf")
@@ -154,5 +161,6 @@ class QmixModel:
             action = np.random.choice(avail_actions_ind)  # action是一个整数
         else:
             action = torch.argmax(q_value)
-            # action = action.cpu().numpy()
+            if self.args.ger_in_gpu:
+                action = action.cpu().numpy()
         return action

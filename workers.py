@@ -7,6 +7,7 @@ from torch.multiprocessing import Pipe, Process
 import torch.distributed as dist
 import time
 from copy import deepcopy
+from threading import Thread
 # os.environ["CUDA_VISIBLE_DEVICES"] = "2" # 卡1更新 卡0，1,2，3收集数据
 
 # cuda0 = torch.device('cuda:0')
@@ -30,7 +31,7 @@ class Worker(Process):
         self.share_model = share_model
         self.data_queue = data_queue
         #用来传回给actor动作的
-        self.worker_agent = qmix_model.QmixModel(args,wk_id)
+        self.worker_agent = qmix_model.QmixModel(args)
         # self.train_steps = 0
         self.n_agents = args.n_agents
         # self.memory = [None for _ in range(self.args.env_nums)] # 同步？
@@ -87,7 +88,7 @@ class Worker(Process):
                         #不仅仅是只有一个环境 ，甚至不仅仅是只有一个worker的环境
                         self.data_queue.put(deepcopy(experience))
                         #这里print说明又有一条episode数据被该worker生产出来并放进了队列中
-                        print('======Worker {} Queue size:{}'.format(self.wk_id, self.data_queue.qsize()))
+                        # print('======Worker {} Queue size:{}'.format(self.wk_id, self.data_queue.qsize()))
                         # 等待，不让队列中的数据太多，太多了首先会占很多的存储空间，第二都是一些比较旧的数据
                         if self.data_queue.qsize() > 200:
                             while self.data_queue.qsize() >= 100:
@@ -95,8 +96,11 @@ class Worker(Process):
                                 time.sleep(4)
                         # 一分钟测一次
                         # 只用0号worker测试 画图费时间 也可以每个都画
+                        # if self.wk_id==0:
+                        #     print("long time=",long_time)
                         if long_time % 60 == 0 and long_time != last_time and self.wk_id == 0:
                             # print('plt,', long_time)
+                            # print(111111111111111111111111111111)
                             tmp_reward /= rcount
                             self.episode_rewards.append(tmp_reward)
                             self.plt(num)
@@ -113,7 +117,7 @@ class Worker(Process):
                         action = self.worker_agent.choose_action(obs, last_action, agent_id,
                                                                  avail_action, epsilon, env_id, evaluate=False)
                         # print(action)
-                        parent_conn.send(action)
+                         parent_conn.send(action)
             # 定期更新
             if self.args.ddp:
                 self.worker_agent.eval_rnn.load_state_dict({k.replace('module.',''):v for k,v in self.share_model.state_dict().items()})

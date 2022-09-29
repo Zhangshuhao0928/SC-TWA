@@ -22,6 +22,9 @@ from common.arguments import get_common_args, get_mixer_args
 def trainer(args):
     begin=time.time()
     buffer = ReplayBuffer(args)
+    rank = args.local_rank
+    # dist.init_process_group("nccl")
+    # torch.cuda.set_device(args.local_rank)
     # 这一句代码是显存爆掉的根源
     torch.multiprocessing.set_start_method('spawn')  # linux默认采用fork启动子进程，在这种情况下多进程中重新初始化CUDA会报错
     data_queue = Queue()  # 和worker交互用
@@ -130,3 +133,10 @@ if __name__ == "__main__":
 
 # 总结 主进程是1.5G左右的显存占用，每个worker1.5G显存占用，每个actor1.7G显存占用
 # 并且开多个worker-actor时，GPU利用率会显著提升
+
+#这个代码不会创建僵尸进程（把gpu清空之后）  会在tmp中创建6个sc的文件夹
+
+#worker和actor都是进程， 53s 500次训练
+#worker是线程，actor是进程，79s 500次训练
+#worker是进程，actor是线程，66s 500次训练 但是数据队列中的数据最多就60多 没有到200
+#worker和actor都是线程， 274s 500次训练 明显感觉到数据产生慢
