@@ -2,6 +2,7 @@ import numpy as np
 import torch
 
 from policy.qmix import QMIX
+from policy.per_qmix import PERQMIX
 from torch.distributions import Categorical
 import os
 # Agent no communication
@@ -11,8 +12,15 @@ class Agents:
         self.n_agents = args.n_agents
         self.state_shape = args.state_shape
         self.obs_shape = args.obs_shape
-        self.policy = QMIX(args,rank)
         self.args = args
+
+        if args.alg == 'qmix':
+            self.policy = QMIX(args,rank)
+        elif args.alg == 'per_qmix':
+            self.policy = PERQMIX(args,rank)
+        else:
+            raise Exception("No such algorithm")
+
         print('Init Agents')
 
     def choose_action(self, obs, last_action, agent_num, avail_actions, epsilon, env_id, evaluate=False):
@@ -84,23 +92,34 @@ class Agents:
     def train(self, batch, train_step, epsilon=None):  # coma needs epsilon for training
         # different episode has different length, so we need to get max length of the batch
         max_episode_len = self._get_max_episode_len(batch)
+        if self.args.drqn:
+            random_idx=np.random.randint(0,max_episode_len//2)
+        else:
+            random_idx=0
         for key in batch.keys():
-            if key != 'z':
+            if key not in ('z','n_1','n_2','pri','episode_reward','episode_len'):
                 #在这里所有的数据就处理成等长度了
-                batch[key] = batch[key][:, :max_episode_len]
-        self.policy.learn(batch, max_episode_len, train_step, epsilon)
+                batch[key] = batch[key][:, random_idx:max_episode_len]
+
+        self.policy.learn(batch, random_idx,max_episode_len, train_step, epsilon)
         if train_step > 0 and train_step % self.args.save_cycle == 0:
             self.policy.save_model(train_step)
 
-    def train_per(self, per_buffer, tree_idx, batch, ISWeights, train_step, epsilon=None):  # coma在训练时也需要epsilon计算动作的执行概率
+    def train_per(self, per_buffer, tree_idx, tree_data_idx,batch, ISWeights, train_step, epsilon=None):  # coma在训练时也需要epsilon计算动作的执行概率
         # 每次学习时，各个episode的长度不一样，因此取其中最长的episode作为所有episode的长度
-        # max_episode_len = self._get_max_episode_len(batch)
-        max_episode_len = self.args.episode_limit
+        max_episode_len = self._get_max_episode_len(batch)
+        # 但是这里应该是要匹配树传过来的尺寸好在loss的时候加权，可以考虑在树种收集样本的时候直接找出最大长度，这样就可以避免一直使用最大长度
+        # max_episode_len = self.args.episode_limit
         # print(batch['o'].shape)
-        # exit()
+        if self.args.drqn:
+            random_idx=np.random.randint(0,max_episode_len//2)
+        else:
+            random_idx=0
         for key in batch.keys():
-            batch[key] = batch[key][:, :max_episode_len]
-        self.policy.learn(per_buffer, tree_idx, batch, ISWeights, max_episode_len, train_step, epsilon)
+            if key not in ('z', 'n_1', 'n_2', 'ee_if', 'episode_reward', 'episode_len'):
+                batch[key] = batch[key][:, random_idx:max_episode_len]
+        ISWeights_ = ISWeights[:, random_idx:max_episode_len]
+        self.policy.learn(per_buffer, random_idx,tree_idx, tree_data_idx,batch, ISWeights_, max_episode_len, train_step, epsilon)
         if train_step > 0 and train_step % self.args.save_cycle == 0:
             self.policy.save_model(train_step)
 

@@ -2,17 +2,14 @@ import torch
 import os
 from network.base_net import RNN
 from network.qmix_net import QMixNet
+# from common.per import PEReplay
+import numpy as np
 import torch.nn as nn
 import torch.distributed as dist
 from policy.lamb import Lamb
-# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1" # 卡1更新 卡0，1,2，3收集数据
-#
-# cuda0 = torch.device('cuda:0')
-# cuda1 = torch.device('cuda:1')
 
-# 训练专用
-class QMIX:
-    def __init__(self, args,rank):
+class PERQMIX:
+    def __init__(self, args, rank):
         self.n_actions = args.n_actions
         self.n_agents = args.n_agents
         self.state_shape = args.state_shape
@@ -23,17 +20,19 @@ class QMIX:
             input_shape += self.n_actions
         if args.reuse_network:
             input_shape += self.n_agents
+        # if args.learn and args.per:
+        #     self.buffer = PEReplay(args)
 
-        # 神经网络 这就是所谓的modoel
-        self.eval_rnn = RNN(input_shape, args) # 每个agent选动作的网络
+        # 神经网络
+        self.eval_rnn = RNN(input_shape, args)  # 每个agent选动作的网络
         self.target_rnn = RNN(input_shape, args)
         self.eval_qmix_net = QMixNet(args)  # 把agentsQ值加起来的网络
         self.target_qmix_net = QMixNet(args)
 
         self.args = args
-        self.rank=rank
-        #将模型加载到gpu中
+        self.rank = rank
 
+        # 如果用GPU，则将模型加载到GPU中
         if self.args.cuda:
             # self.eval_rnn.cuda()
             # self.target_rnn.cuda()
@@ -43,21 +42,18 @@ class QMIX:
             self.target_rnn.to(rank)
             self.eval_qmix_net.to(rank)
             self.target_qmix_net.to(rank)
-            # if self.args.dp:
-            #     self.eval_rnn=nn.DataParallel(self.eval_rnn)
-            #     self.target_rnn = nn.DataParallel(self.target_rnn)
-            #     self.eval_qmix_net = nn.DataParallel(self.eval_qmix_net)
-            #     self.target_qmix_net = nn.DataParallel(self.target_qmix_net)
+
             if self.args.ddp:
                 dist.init_process_group("nccl")
-                self.eval_rnn=nn.parallel.DistributedDataParallel(self.eval_rnn,device_ids=[rank])
-                self.target_rnn = nn.parallel.DistributedDataParallel(self.target_rnn,device_ids=[rank])
-                self.eval_qmix_net = nn.parallel.DistributedDataParallel(self.eval_qmix_net,device_ids=[rank])
-                self.target_qmix_net = nn.parallel.DistributedDataParallel(self.target_qmix_net,device_ids=[rank])
+                self.eval_rnn = nn.parallel.DistributedDataParallel(self.eval_rnn, device_ids=[rank])
+                self.target_rnn = nn.parallel.DistributedDataParallel(self.target_rnn, device_ids=[rank])
+                self.eval_qmix_net = nn.parallel.DistributedDataParallel(self.eval_qmix_net, device_ids=[rank])
+                self.target_qmix_net = nn.parallel.DistributedDataParallel(self.target_qmix_net, device_ids=[rank])
 
-        self.model_dir = args.model_dir + '/' + 'mp_qmix' + '/' + args.map
+        self.model_dir = args.model_dir + '/' + 'my_per_qmix' + '/' + args.map
         # 如果存在模型则加载模型
         if self.args.load_model:
+            # print("?")
             if os.path.exists(self.model_dir + '/3_rnn_net_params.pkl'):
                 path_rnn = self.model_dir + '/3_rnn_net_params.pkl'
                 path_qmix = self.model_dir + '/3_qmix_net_params.pkl'
@@ -76,20 +72,20 @@ class QMIX:
         if args.optimizer == "RMS":
             self.optimizer = torch.optim.RMSprop(self.eval_parameters, lr=args.lr)
         if args.optimizer == 'lamb':
-            self.optimizer = Lamb(self.eval_parameters,lr=args.lr)
+            self.optimizer = Lamb(self.eval_parameters, lr=args.lr)
         if args.optimizer == 'adamw':
             self.optimizer = torch.optim.AdamW(self.eval_parameters, lr=args.lr)
         if args.optimizer == 'adam':
             self.optimizer = torch.optim.Adam(self.eval_parameters, lr=args.lr)
+
         # 执行过程中，要为每个agent都维护一个eval_hidden
         # 学习过程中，要为每个episode的每个agent都维护一个eval_hidden、target_hidden
         self.eval_hidden = None
         self.target_hidden = None
-        # 用于决策 交互
-        # self.eval_hiddens = []
-        print('Init alg QMIX')
+        print('Init alg PER_QMIX')
 
-    def  learn(self, batch, random_idx,max_episode_len, train_step, epsilon=None):  # train_step表示是第几次学习，用来控制更新target_net网络的参数
+    def learn(self, buffer, random_idx,tree_idx,tree_data_idx, batch, ISWeights, max_episode_len, train_step,
+              epsilon=None):  # train_step表示是第几次学习，用来控制更新target_net网络的参数
         '''
         在learn的时候，抽取到的数据是四维的，四个维度分别为 1——第几个episode 2——episode中第几个transition
         3——第几个agent的数据 4——具体obs维度。因为在选动作时不仅需要输入当前的inputs，还要给神经网络输入hidden_state，
@@ -97,7 +93,10 @@ class QMIX:
         传入每个episode的同一个位置的transition
         '''
         episode_num = batch['o'].shape[0]
-        #这里初始化hidden的episode_num就是一个batch的了，跟worker中不一样，不再是一直是1了
+        # print(episode_num)
+        # exit()
+        self.buffer = buffer
+        ISWeights = torch.tensor(ISWeights, dtype=torch.float32)
         self.init_hidden(episode_num)
         for key in batch.keys():  # 把batch里的数据转化成tensor
             if key == 'u':
@@ -105,13 +104,15 @@ class QMIX:
             else:
                 batch[key] = torch.tensor(batch[key], dtype=torch.float32)
         s, s_next, u, r, avail_u, avail_u_next, terminated = batch['s'], batch['s_next'], batch['u'], \
-                                                             batch['r'],  batch['avail_u'], batch['avail_u_next'],\
+                                                             batch['r'], batch['avail_u'], batch['avail_u_next'], \
                                                              batch['terminated']
-        # 用来把那些填充的经验的TD-error置0，从而不让它们影响到学习
-        #有用的time_step的mask处的值会是1，填充的time_step的mask值会是0
-        mask = 1 - batch["padded"].float()
-
+        mask = 1 - batch["padded"].float()  # 用来把那些填充的经验的TD-error置0，从而不让它们影响到学习
+        # print(batch['padded'].shape)
+        # print('mask', mask.shape)
         # 得到每个agent对应的Q值，维度为(episode个数, max_episode_len， n_agents， n_actions)
+        # 下面这句代码应该是没用的
+        # max_episode_len = self.args.episode_limit
+
         q_evals, q_targets = self.get_q_values(batch, random_idx,max_episode_len)
         if self.args.cuda:
             s = s.cuda()
@@ -120,50 +121,61 @@ class QMIX:
             s_next = s_next.cuda()
             terminated = terminated.cuda()
             mask = mask.cuda()
+            ISWeights = ISWeights.cuda()
         # 取每个agent动作对应的Q值，并且把最后不需要的一维去掉，因为最后一维只有一个值了
-        # q_evals = torch.gather(q_evals, dim=3, index=u).squeeze(3)
-        #按照联合动作u中的每个智能体的动作分量去提取出相应的每个智能体的q值
         q_evals = torch.gather(q_evals, dim=3, index=u).squeeze(3).cuda()
 
         # 得到target_q
         q_targets[avail_u_next == 0.0] = - 9999999
-        # [0]是返回值，[1]是返回相应的索引
-        #将每个智能体都选择q值最大的动作，在qmix里也就满足了单调性原则，所以其组成的联合动作的qtot也最大
         q_targets = q_targets.max(dim=3)[0]
-        # 返回的维度是（episode_num,max_episode_len,1)
-        #获得qtot   q_evals输入在公式中既是联合动作u的输入
-        q_total_eval = self.eval_qmix_net(q_evals, s)
-        #获得max q‘tot  q_targets输入在公式中就是max联合动作u’的输入
-        q_total_target = self.target_qmix_net(q_targets, s_next)
-        #这里去掉了已经结束的轨迹的后续因为填充所导致的q_total_target
-        targets = r + self.args.gamma * q_total_target * (1 - terminated)
 
+        q_total_eval = self.eval_qmix_net(q_evals, s)
+        q_total_target = self.target_qmix_net(q_targets, s_next)
+
+        targets = r + self.args.gamma * q_total_target * (1 - terminated)
+        # (episode_num, max_episode_len, 1)
         td_error = (q_total_eval - targets.detach())
         masked_td_error = mask * td_error  # 抹掉填充的经验的td_error
 
         # 不能直接用mean，因为还有许多经验是没用的，所以要求和再比真实的经验数，才是真正的均值
-        loss = (masked_td_error ** 2).sum() / mask.sum()
-
-        # 初始化梯度为0 梯度的形状和权重参数是一样的
+        # loss = (masked_td_error ** 2).sum() / mask.sum()
+        # print('masked_td:', masked_td_error.shape)
+        # print('ISWeights:', ISWeights.shape)
+        loss = (ISWeights * (masked_td_error ** 2)).sum() / mask.sum()
+        # print(masked_td_error,mask)
+        # (episode_num,1)
+        # priority = np.mean(masked_td_error.data.cpu().numpy(), axis=1)
+        priority = np.sum(masked_td_error.data.cpu().numpy(), axis=1)/(np.sum(mask.cpu().numpy(),axis=1)+0.00001)
+        print("isweight={} ~ {},mte={} ~ {},priority={} ~ {},loss={}".format(ISWeights.detach().cpu().numpy().min(),
+                                                                       ISWeights.detach().cpu().numpy().max(),
+                                                                       masked_td_error.detach().cpu().numpy().min(),
+                                                                       masked_td_error.detach().cpu().numpy().max(),
+                                                                       priority.min(),
+                                                                       priority.max(), loss))
+        print("isweight mean:%.4f,priority mean:%.4f"%(ISWeights.detach().cpu().numpy().mean(),priority.mean()))
         self.optimizer.zero_grad()
+        # 保留计算图，防止多次backward，但是这样可能造成内存占用过大，因为计算图一直保存了
+        # retain_graph=True可以先去掉
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.eval_parameters, self.args.grad_norm_clip)
         self.optimizer.step()
-        # 更新target网络
+
+        self.buffer.batch_update(tree_idx=tree_idx, tree_data_idx=tree_data_idx,abs_errors=priority)
+
         if train_step > 0 and train_step % self.args.target_update_cycle == 0:
             self.target_rnn.load_state_dict(self.eval_rnn.state_dict())
             self.target_qmix_net.load_state_dict(self.eval_qmix_net.state_dict())
 
     def _get_inputs(self, batch, transition_idx):
-        # 取出所有episode上该transition_idx（time_step）的经验，u_onehot要取出所有，因为要用到上一条
+        # 取出所有episode上该transition_idx的经验，u_onehot要取出所有，因为要用到上一条
         obs, obs_next, u_onehot = batch['o'][:, transition_idx], \
                                   batch['o_next'][:, transition_idx], batch['u_onehot'][:]
         episode_num = obs.shape[0]
         inputs, inputs_next = [], []
         inputs.append(obs)
         inputs_next.append(obs_next)
-
         # 给obs添加上一个动作、agent编号
+
         if self.args.last_action:
             if transition_idx == 0:  # 如果是第一个时间步的经验，就让前一个动作为0向量
                 inputs.append(torch.zeros_like(u_onehot[:, transition_idx]))
@@ -185,7 +197,7 @@ class QMIX:
     def get_q_values(self, batch, random_idx,max_episode_len):
         episode_num = batch['o'].shape[0]
         q_evals, q_targets = [], []
-        #每个时间步分别处理运算
+        # 每个时间步分别处理运算
         for transition_idx in range(max_episode_len-random_idx):
             inputs, inputs_next = self._get_inputs(batch, transition_idx)  # 给obs加last_action、agent_id
             if self.args.cuda:
@@ -193,12 +205,13 @@ class QMIX:
                 inputs_next = inputs_next.cuda()
                 self.eval_hidden = self.eval_hidden.cuda()
                 self.target_hidden = self.target_hidden.cuda()
-            #这里直接将整个hidden传入了，因为是一个batch并且多个agent的数据作为input
-            q_eval, self.eval_hidden = self.eval_rnn(inputs, self.eval_hidden)  # inputs维度为(40,96)，得到的q_eval维度为(40,n_actions)
+            # 这里直接将整个hidden传入了，因为是一个batch并且多个agent的数据作为input
+            q_eval, self.eval_hidden = self.eval_rnn(inputs,
+                                                     self.eval_hidden)  # inputs维度为(40,96)，得到的q_eval维度为(40,n_actions)
             q_target, self.target_hidden = self.target_rnn(inputs_next, self.target_hidden)
 
             # 把q_eval维度重新变回(8, 5,n_actions)
-            #这里的q是每个episode的某一时间步下的每个智能体的每个动作的评分
+            # 这里的q是每个episode的某一时间步下的每个智能体的每个动作的评分
             q_eval = q_eval.view(episode_num, self.n_agents, -1)
             q_target = q_target.view(episode_num, self.n_agents, -1)
             q_evals.append(q_eval)
@@ -207,7 +220,7 @@ class QMIX:
         # 把该列表转化成(episode个数, max_episode_len， n_agents，n_actions)的数组
         q_evals = torch.stack(q_evals, dim=1)
         q_targets = torch.stack(q_targets, dim=1)
-        #返回的都是tensor
+        # 返回的都是tensor
         return q_evals, q_targets
 
     # 只给训练用
@@ -216,19 +229,9 @@ class QMIX:
         self.eval_hidden = torch.zeros((episode_num, self.n_agents, self.args.rnn_hidden_dim))
         self.target_hidden = torch.zeros((episode_num, self.n_agents, self.args.rnn_hidden_dim))
 
-    # # 多环境配多个hidden，用于交互，用不到target
-    # def create_hidden(self, episode_num):
-    #     for _ in range(self.args.env_nums):
-    #         self.eval_hidden = torch.zeros((episode_num, self.n_agents, self.args.rnn_hidden_dim))
-    #         self.eval_hiddens.append(self.eval_hidden)
-    #
-    # # 每个环境异步，因此需要独立初始化
-    # def restart_hidden(self, env_id, episode_num):
-    #     self.eval_hiddens[env_id] = torch.zeros((episode_num, self.n_agents, self.args.rnn_hidden_dim))
-
     def save_model(self, train_step):
         num = str(train_step // self.args.save_cycle)
         if not os.path.exists(self.model_dir):
             os.makedirs(self.model_dir)
         torch.save(self.eval_qmix_net.state_dict(), self.model_dir + '/' + num + '_qmix_net_params.pkl')
-        torch.save(self.eval_rnn.state_dict(),  self.model_dir + '/' + num + '_rnn_net_params.pkl')
+        torch.save(self.eval_rnn.state_dict(), self.model_dir + '/' + num + '_rnn_net_params.pkl')

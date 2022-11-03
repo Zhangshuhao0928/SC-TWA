@@ -116,6 +116,8 @@ class QmixModel:
         self.eval_hiddens = []
         print('Init QmixModel for Worker')
 
+        self.eval_hidden_for_evaluate=None
+
     # 多环境配多个hidden，用于交互，用不到target
     def create_hidden(self, episode_num):
         for _ in range(self.args.env_nums):
@@ -163,4 +165,49 @@ class QmixModel:
             action = torch.argmax(q_value)
             if self.args.ger_in_gpu:
                 action = action.cpu().numpy()
+        return action
+
+    def create_hidden_for_evaluate(self, episode_num):
+        self.eval_hidden_for_evaluate = torch.zeros((episode_num, self.n_agents, self.args.rnn_hidden_dim))
+
+
+    def choose_action_for_evaluate(self, obs, last_action, agent_num, avail_actions, epsilon, maven_z=None, evaluate=False):
+        inputs = obs.copy()
+        avail_actions_ind = np.nonzero(avail_actions)[0]  # index of actions which can be choose
+
+        # transform agent_num to onehot vector
+        agent_id = np.zeros(self.n_agents)
+        agent_id[agent_num] = 1.
+
+        if self.args.last_action:
+            inputs = np.hstack((inputs, last_action))
+        if self.args.reuse_network:
+            inputs = np.hstack((inputs, agent_id))
+        hidden_state = self.eval_hidden_for_evaluate[:, agent_num, :]
+
+        # transform the shape of inputs from (42,) to (1,42)
+        inputs = torch.tensor(inputs, dtype=torch.float32).unsqueeze(0)
+        avail_actions = torch.tensor(avail_actions, dtype=torch.float32).unsqueeze(0)
+        # if self.args.cuda:
+        #     inputs = inputs.cuda()
+        #     hidden_state = hidden_state.cuda()
+
+        # get q value
+        if self.args.alg == 'maven':
+            maven_z = torch.tensor(maven_z, dtype=torch.float32).unsqueeze(0)
+            if self.args.cuda:
+                maven_z = maven_z.cuda()
+            q_value, self.eval_hidden_for_evaluate[:, agent_num, :] = self.eval_rnn(inputs, hidden_state, maven_z)
+        else:
+            q_value, self.eval_hidden_for_evaluate[:, agent_num, :] = self.eval_rnn(inputs, hidden_state)
+
+        # choose action from q value
+        if self.args.alg == 'coma' or self.args.alg == 'central_v' or self.args.alg == 'reinforce':
+            action = self._choose_action_from_softmax(q_value.cpu(), avail_actions, epsilon, evaluate)
+        else:
+            q_value[avail_actions == 0.0] = - float("inf")
+            if np.random.uniform() < epsilon:
+                action = np.random.choice(avail_actions_ind)  # action是一个整数
+            else:
+                action = torch.argmax(q_value)
         return action

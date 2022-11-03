@@ -112,27 +112,29 @@ import threading
 #     except:
 #         continue
 
-class test111(threading.Thread):
-    def __init__(self):
-        super(test111, self).__init__(daemon=True)
-        self.eval_hidden = None
-        self.eval_hiddens = []
-        self.create_hidden(1)
+# class test111(threading.Thread):
+#     def __init__(self):
+#         super(test111, self).__init__(daemon=True)
+#         self.eval_hidden = None
+#         self.eval_hiddens = []
+#         self.create_hidden(1)
+#
+#     def create_hidden(self, episode_num):
+#         for _ in range(2):
+#             self.eval_hidden = torch.zeros((1, 4))
+#             print(id(self.eval_hidden))
+#             self.eval_hiddens.append(self.eval_hidden)
+#
+#     def run(self):
+#         self.eval_hiddens[0] = torch.randn((1, 4))
+#         print(self.eval_hiddens)
+#         print(id(self.eval_hiddens))
+#
+#
+#
+# for i in range(2):
+#     actor = test111()
+#     actor.start()
+#     actor.join()
 
-    def create_hidden(self, episode_num):
-        for _ in range(2):
-            self.eval_hidden = torch.zeros((1, 4))
-            print(id(self.eval_hidden))
-            self.eval_hiddens.append(self.eval_hidden)
 
-    def run(self):
-        self.eval_hiddens[0] = torch.randn((1, 4))
-        print(self.eval_hiddens)
-        print(id(self.eval_hiddens))
-
-
-
-for i in range(2):
-    actor = test111()
-    actor.start()
-    actor.join()

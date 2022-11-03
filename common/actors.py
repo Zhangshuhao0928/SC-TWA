@@ -9,9 +9,10 @@ from multiprocessing import Process
 from threading import Thread
 import time
 
+
 class Actor(Process):
-    def __init__(self, args, child_conn, env_idx, buffer_out,wk_id):
-        #守护进程
+    def __init__(self, args, child_conn, env_idx, buffer_out, wk_id):
+        # 守护进程
         super(Actor, self).__init__(daemon=True)
         # self.agents = agents
         self.episode_limit = args.episode_limit
@@ -28,7 +29,13 @@ class Actor(Process):
         self.child_conn = child_conn
         self.buffer_out = buffer_out
         self.env_idx = env_idx
-        self.wk_id=wk_id
+        self.wk_id = wk_id
+
+        # self.threshold = 100
+        # self.upper_bound = 7.5
+        # self.lower_bound = 0
+        # self.increment = 0.5
+
         print('Init Actor')
 
     def generate_episode(self, episode_num=None, evaluate=False):
@@ -36,7 +43,7 @@ class Actor(Process):
         #     self.env.close()
         # roll_start = time.time()
         o, u, r, s, avail_u, u_onehot, terminate, padded = [], [], [], [], [], [], [], []
-        #重置环境
+        # 重置环境
         self.env.reset()
         terminated = False
         win_tag = False
@@ -60,15 +67,15 @@ class Actor(Process):
             state = self.env.get_state()
             actions, avail_actions, actions_onehot = [], [], []
             # 每个agent选择一个动作，所有agent都选择一个动作之后，也就是这个time_step结束
-            #才会开始下一个time_step
+            # 才会开始下一个time_step
             for agent_id in range(self.n_agents):
                 # 一维，（n_actions，）
                 avail_action = self.env.get_avail_agent_actions(agent_id)
 
-                #这个管道不是用来传输episode的，是用来传输参数以便于获得动作的，每个gent分别传送
-                #这里面传入的terminated一定是false
+                # 这个管道不是用来传输episode的，是用来传输参数以便于获得动作的，每个gent分别传送
+                # 这里面传入的terminated一定是false
                 self.child_conn.send([obs[agent_id], last_action[agent_id], agent_id,
-                                     avail_action, epsilon, evaluate, False])
+                                      avail_action, epsilon, evaluate, False])
                 # print('agent :', agent_id)
                 # action是一个int
                 action = self.child_conn.recv()
@@ -80,7 +87,7 @@ class Actor(Process):
                 actions.append(action)
                 actions_onehot.append(action_onehot)
                 avail_actions.append(avail_action)
-                #是个one-hot，size为（n_agent,n_action)
+                # 是个one-hot，size为（n_agent,n_action)
                 last_action[agent_id] = action_onehot
 
             reward, terminated, info = self.env.step(actions)
@@ -89,7 +96,7 @@ class Actor(Process):
             s.append(state)
             # 联合动作 里面每一个shape都是(n_agent,1)
             u.append(np.reshape(actions, [self.n_agents, 1]))
-            #里面每一个都是(n_agent,n_action)
+            # 里面每一个都是(n_agent,n_action)
             u_onehot.append(actions_onehot)
             avail_u.append(avail_actions)
 
@@ -101,6 +108,8 @@ class Actor(Process):
             step += 1
             if self.args.epsilon_anneal_scale == 'step':
                 epsilon = epsilon - self.anneal_epsilon if epsilon > self.min_epsilon else epsilon
+        episode_len = len(terminate)
+        print("worker id={},actor id={},episode len={},reward={},win_tag={}".format(self.wk_id,self.env_idx,episode_len, episode_reward, win_tag))
         # last obs  这里是为target网络的输入做准备的
         obs = self.env.get_obs()
         state = self.env.get_state()
@@ -108,7 +117,7 @@ class Actor(Process):
         s.append(state)
         o_next = o[1:]
         s_next = s[1:]
-        #这里是把上面加进来的last的都删掉，因为只有_next才需要
+        # 这里是把上面加进来的last的都删掉，因为只有_next才需要
         o = o[:-1]
         s = s[:-1]
         # get avail_action for last obs，because target_q needs avail_action in training
@@ -131,7 +140,7 @@ class Actor(Process):
             u_onehot.append(np.zeros((self.n_agents, self.n_actions)))
             avail_u.append(np.zeros((self.n_agents, self.n_actions)))
             avail_u_next.append(np.zeros((self.n_agents, self.n_actions)))
-            #1说明是填充的，0是正常数据
+            # 1说明是填充的，0是正常数据
             padded.append([1.])
             terminate.append([1.])
 
@@ -145,7 +154,9 @@ class Actor(Process):
                        avail_u_next=avail_u_next.copy(),
                        u_onehot=u_onehot.copy(),
                        padded=padded.copy(),
-                       terminated=terminate.copy()
+                       terminated=terminate.copy(),
+                       episode_reward=episode_reward,
+                       episode_len=episode_len
                        )
         # print('padding', len(episode['padded'])) 60
         # add episode dim
@@ -156,40 +167,49 @@ class Actor(Process):
         if evaluate and episode_num == self.args.evaluate_epoch - 1 and self.args.replay_dir != '':
             self.env.save_replay()
             self.env.close()
-        #这里最后才传入terminated=True，用来给worker的done
+
+        # 这里最后才传入terminated=True，用来给worker的done
         self.child_conn.send([0, 0, 0, 0, 0, 0, terminated])
-        #这里deepcopy了一次 将一整个episode的数据传入buffer管道
-        self.buffer_out.send([deepcopy(episode), episode_reward, win_tag])
+        # 这里deepcopy了一次 将一整个episode的数据传入buffer管道
+        self.buffer_out.send([deepcopy(episode), episode_reward, win_tag, step])
+        # if episode_reward >= self.lower_bound:
+        #     self.child_conn.send([0, 0, 0, 0, 0, 0, terminated])
+        #     self.buffer_out.send([deepcopy(episode), episode_reward, win_tag])
+        # else:
+        #     pass
         # roll_end = time.time()
         # print('##rollout time is ：', roll_end - roll_start)
-        #print(np.array(episode['o']).shape)
-        return episode, episode_reward, win_tag
+        # print(np.array(episode['o']).shape)
+
+        return episode, episode_reward, win_tag, step
 
     def run(self):
-        #加载父类的run方法
+        # 加载父类的run方法
         super(Actor, self).run()
         # get agent obs type
         self.env = StarCraft2Env(map_name=self.args.map,
-                            step_mul=self.args.step_mul,
-                            difficulty=self.args.difficulty,
-                            game_version=self.args.game_version,
-                            replay_dir=self.args.replay_dir)
-        #//是整除   平均给每个env需要产生的episode的个数
-        rollouts_number= self.args.n_epoch // (self.args.env_nums * self.args.worker_nums)
-        avg=[]
-        ssum=0
-        avg_=0
+                                 step_mul=self.args.step_mul,
+                                 difficulty=self.args.difficulty,
+                                 game_version=self.args.game_version,
+                                 replay_dir=self.args.replay_dir)
+        # //是整除   平均给每个env需要产生的episode的个数
+        rollouts_number = self.args.n_epoch // (self.args.env_nums * self.args.worker_nums)
+        avg = []
+        ssum = 0
+        avg_ = 0
         for episode_idx in range(rollouts_number):
-            time1=time.time()
-            #episode是每个env独立生产的，所以各个env之间的序号是无序的 每产生一条就print一次
+            time1 = time.time()
+            # episode是每个env独立生产的，所以各个env之间的序号是无序的 每产生一条就print一次
             # print('ID {} Env {} run episode {}'.format(self.wk_id,self.env_idx, episode_idx))
-            _, _, _ = self.generate_episode(episode_idx, evaluate=False)
-            end=time.time()
-            jhtime=end-time1
-            avg.append(jhtime)
-            if len(avg)%50==0:
-                avg_=sum(avg)/len(avg)
-                print("jiao hu time:", avg_)
+            _, _, _,_ = self.generate_episode(episode_idx, evaluate=False)
+            # if episode_idx!=0 and episode_idx % self.threshold == 0 and self.lower_bound <= self.upper_bound:
+            #     self.lower_bound += self.incrementZ`
+            end = time.time()
+            # jhtime = end - time1
+            # avg.append(jhtime)
+            # if len(avg) % 50 == 0:
+            #     avg_ = sum(avg) / len(avg)
+            #     print("jiao hu time:", avg_)
         #     if episode_idx % self.args.evaluate_cycle == 0 and episode_idx != 0:
         #         win_rate, episode_reward = self.evaluate()
         #         print('win_rate is ', win_rate)
@@ -198,4 +218,3 @@ class Actor(Process):
         #         self.plt(self.env_idx)
         # self.plt(self.env_idx)
         self.env.close()
-

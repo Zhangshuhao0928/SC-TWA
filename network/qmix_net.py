@@ -38,7 +38,8 @@ class QMixNet(nn.Module):
         q_values = q_values.view(-1, 1, self.args.n_agents)  # (episode_num * max_episode_len, 1, n_agents) = (1920,1,5)
         states = states.reshape(-1, self.args.state_shape)  # (episode_num * max_episode_len, state_shape)
 
-        w1 = torch.abs(self.hyper_w1(states))  # (1920, 160)
+        # w1 = torch.abs(self.hyper_w1(states))  # (1920, 160)
+        w1 = torch.softmax(self.hyper_w1(states),dim=1)  # (1920, 160)
         b1 = self.hyper_b1(states)  # (1920, 32)
 
         w1 = w1.view(-1, self.args.n_agents, self.args.qmix_hidden_dim)  # (1920, 5, 32)
@@ -46,7 +47,8 @@ class QMixNet(nn.Module):
 
         hidden = F.elu(torch.bmm(q_values, w1) + b1)  # (1920, 1, 32)
 
-        w2 = torch.abs(self.hyper_w2(states))  # (1920, 32)
+        # w2 = torch.abs(self.hyper_w2(states))  # (1920, 32)
+        w2 = torch.softmax(self.hyper_w2(states),dim=1)  # (1920, 160)
         b2 = self.hyper_b2(states)  # (1920, 1)
 
         w2 = w2.view(-1, self.args.qmix_hidden_dim, 1)  # (1920, 32, 1)

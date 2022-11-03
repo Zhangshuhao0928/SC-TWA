@@ -11,7 +11,7 @@ def get_common_args():
     # the environment setting
     parser.add_argument('--difficulty', type=str, default='7', help='the difficulty of the game')
     parser.add_argument('--game_version', type=str, default='latest', help='the version of the game')
-    parser.add_argument('--map', type=str, default='3m', help='the map of the game')
+    parser.add_argument('--map', type=str, default='8m', help='the map of the game')
     parser.add_argument('--seed', type=int, default=123, help='random seed')
     parser.add_argument('--step_mul', type=int, default=8, help='how many steps to make an action')
     parser.add_argument('--replay_dir', type=str, default='', help='absolute path to save the replay')
@@ -25,6 +25,7 @@ def get_common_args():
     parser.add_argument('--gamma', type=float, default=0.99, help='discount factor')
     parser.add_argument('--optimizer', type=str, default="RMS", help='optimizer')
     parser.add_argument('--evaluate_epoch', type=int, default=32, help='number of the epoch to evaluate the agent')
+    parser.add_argument('--evaluate_cycle', type=int, default=5000, help='how often to evaluate the model')
     parser.add_argument('--model_dir', type=str, default='./model', help='model directory of the policy')
     parser.add_argument('--result_dir', type=str, default='./result', help='result directory of the policy')
     parser.add_argument('--load_model', type=bool, default=False, help='whether to load the pretrained model')
@@ -34,6 +35,8 @@ def get_common_args():
     parser.add_argument('--dp',type=bool,default=False,help='whether to use DP')
     parser.add_argument('--ddp', type=bool, default=True, help='whether to use DDP')
     parser.add_argument('--ger_in_gpu', type=bool, default=False, help='whether use GPU to general data')
+    parser.add_argument('--per', type=bool, default=False, help='whether use PER ')
+    parser.add_argument('--drqn',type=bool,default=False,help='whether use drqn')
     # parser.add_argument('--thread_num', type=int, default=10, help='decide using thread while in ddp')
     # parser.add_argument('--node_rank', type=int, default=0, help='use for multi-machines')
     # parser.add_argument('--world_size', type=int, default=3, help='use for multi-machines')
@@ -54,7 +57,6 @@ def get_coma_args(args):
     args.anneal_epsilon = 0.00064
     args.min_epsilon = 0.02
     args.epsilon_anneal_scale = 'epoch'
-
     # lambda of td-lambda return
     args.td_lambda = 0.8
 
@@ -65,7 +67,7 @@ def get_coma_args(args):
     args.n_episodes = 1
 
     # how often to evaluate
-    args.evaluate_cycle = 100
+    # args.evaluate_cycle = 100
 
     # how often to save the model
     args.save_cycle = 5000
@@ -87,12 +89,14 @@ def get_mixer_args(args):
     args.two_hyper_layers = False
     args.hyper_hidden_dim = 64
     args.qtran_hidden_dim = 64
-    args.lr = 5e-4
+    # args.lr = 5e-4
+    args.lr = 1e-3
 
     # epsilon greedy
     args.epsilon = 1
     args.min_epsilon = 0.05
-    anneal_steps = 50000
+    # anneal_steps = 50000
+    anneal_steps = 100000
     args.anneal_epsilon = (args.epsilon - args.min_epsilon) / anneal_steps
     args.epsilon_anneal_scale = 'step'
 
@@ -106,10 +110,10 @@ def get_mixer_args(args):
     args.train_steps = 1
 
     # # how often to evaluate
-    args.evaluate_cycle = 100
+    # args.evaluate_cycle = 100
 
     # experience replay
-    args.batch_size = 33
+    args.batch_size = 128
     args.control_queue_size=6
     args.buffer_size = 5000
 
